@@ -1,5 +1,7 @@
 import logging
 import json
+import os
+from datetime import datetime
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -18,75 +20,129 @@ from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("agent")
-
 load_dotenv(".env.local")
 
+LOG_FILE = "wellness_log.json"
 
-class Assistant(Agent):
-    def __init__(self) -> None:
+
+# -------- JSON PERSISTENCE -------- #
+def read_last_checkin():
+    if not os.path.exists(LOG_FILE):
+        return None
+    try:
+        with open(LOG_FILE, "r") as f:
+            data = json.load(f)
+            if "sessions" in data and len(data["sessions"]) > 0:
+                return data["sessions"][-1]
+    except:
+        return None
+    return None
+
+
+def write_checkin(entry):
+    try:
+        if not os.path.exists(LOG_FILE):
+            data = {"sessions": []}
+        else:
+            with open(LOG_FILE, "r") as f:
+                data = json.load(f)
+    except:
+        data = {"sessions": []}
+
+    data["sessions"].append(entry)
+    with open(LOG_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+# -------- WELLNESS AGENT -------- #
+class WellnessAgent(Agent):
+    def __init__(self):
         super().__init__(
             instructions=(
-                "You are a friendly barista at StarBrew Coffee. "
-                "Your job is to take coffee orders step-by-step. "
-                "You must maintain an internal order state: drinkType, size, milk, extras, and name. "
-                "Ask only ONE question at a time until all fields are completed. "
-                "Be warm, enthusiastic, and customer-friendly."
+                "You are a supportive daily Health & Wellness Voice Companion. "
+                "Do a short check-in one question at a time. "
+                "Do NOT provide diagnostic or medical advice.\n\n"
+                "Conversation flow:\n"
+                "1) Ask how the user is feeling emotionally\n"
+                "2) Ask about their energy today\n"
+                "3) Ask for 1–3 goals for today\n"
+                "4) Offer simple realistic encouragement\n"
+                "5) Recap mood + energy + goals and confirm, then stop\n"
+                "Tone: warm, concise, encouraging."
             )
         )
+        self.stage = "mood"
+        self.prev = read_last_checkin()
+        self.mood = None
+        self.energy = None
+        self.goals = None
 
-        self.order = {
-            "drinkType": None,
-            "size": None,
-            "milk": None,
-            "extras": [],
-            "name": None,
-        }
-
-    async def on_response(self, response, session: AgentSession):
-        user_msg = response.text.lower().strip()
-
-        # Step-by-step fill order fields
-        if self.order["drinkType"] is None:
-            self.order["drinkType"] = user_msg
-            return await session.send_response("Great choice! What size do you prefer — Small, Medium, or Large?")
-
-        if self.order["size"] is None:
-            self.order["size"] = user_msg
-            return await session.send_response("Nice! What type of milk would you like — whole, oat, soy, or almond?")
-
-        if self.order["milk"] is None:
-            self.order["milk"] = user_msg
-            return await session.send_response("Got it! Would you like any extras like whipped cream, caramel, vanilla? If none, say 'no extras'.")
-
-        if self.order["extras"] == []:
-            if "no" in user_msg:
-                self.order["extras"] = []
-            else:
-                self.order["extras"] = [e.strip() for e in user_msg.split(",")]
-            return await session.send_response("Awesome! May I have your name for the cup?")
-
-        if self.order["name"] is None:
-            self.order["name"] = user_msg.title()
-
-            confirmation = (
-                f"Thank you {self.order['name']}! "
-                f"Your {self.order['size']} {self.order['drinkType']} "
-                f"with {self.order['milk']} milk"
-                + (f" and extras {', '.join(self.order['extras'])}" if self.order['extras'] else "")
-                + " is on the way! ☕"
+    async def on_start(self, session: AgentSession):
+        if self.prev:
+            await session.say(
+                f"Welcome back! Last time you mentioned feeling '{self.prev['mood']}' "
+                f"with '{self.prev['energy']}' energy. How are you feeling today emotionally?",
+                allow_interruptions=True,
+            )
+        else:
+            await session.say(
+                "Hi, good to see you again! How are you feeling today emotionally?",
+                allow_interruptions=True,
             )
 
-            await session.send_response(confirmation)
-            self.save_order()
+    async def on_response(self, response, session: AgentSession):
+        msg = response.text.strip()
+
+        if self.stage == "mood":
+            self.mood = msg
+            self.stage = "energy"
+            return await session.say(
+                "Thank you. How is your energy today — low, medium, or high?",
+                allow_interruptions=True,
+            )
+
+        if self.stage == "energy":
+            self.energy = msg
+            self.stage = "goals"
+            return await session.say(
+                "Got it. What are 1–3 goals you want to focus on today?",
+                allow_interruptions=True,
+            )
+
+        if self.stage == "goals":
+            self.goals = [g.strip() for g in msg.split(",")] if msg else []
+            self.stage = "recap"
+            return await session.say(
+                "Those sound good. Tip: small steps and short breaks can help. Ready for your recap?",
+                allow_interruptions=True,
+            )
+
+        if self.stage == "recap":
+            summary = (
+                f"You're feeling '{self.mood}' with '{self.energy}' energy, "
+                f"and your goals today are: {', '.join(self.goals)}."
+            )
+
+            await session.say(summary + " Does that sound right?", allow_interruptions=True)
+
+            write_checkin(
+                {
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "mood": self.mood,
+                    "energy": self.energy,
+                    "goals": self.goals,
+                    "summary": summary,
+                }
+            )
+
+            self.stage = "done"
             return
 
-    def save_order(self):
-        """Appends order to JSON file locally."""
-        with open("orders.json", "a") as f:
-            json.dump(self.order, f)
-            f.write("\n")
+        if self.stage == "done":
+            await session.say("Perfect. I'll check in with you again tomorrow 💛", allow_interruptions=True)
 
 
+# -------- WORKER SETUP -------- #
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
@@ -96,7 +152,7 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
-        llm=google.LLM(model="gemini-2.5-flash"),
+        llm=google.LLM(),   # 🔥 auto-selects a supported model (no 404 issues)
         tts=murf.TTS(
             voice="Anusha",
             style="Conversation",
@@ -108,27 +164,26 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
-    usage_collector = metrics.UsageCollector()
-
+    usage = metrics.UsageCollector()
     @session.on("metrics_collected")
-    def _on_metrics_collected(ev: MetricsCollectedEvent):
+    def _collect(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
+        usage.collect(ev.metrics)
 
     async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
+        logger.info(f"Usage summary: {usage.get_summary()}")
 
     ctx.add_shutdown_callback(log_usage)
 
     await session.start(
-        agent=Assistant(),
+        agent=WellnessAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )
 
+    await session.current_agent.on_start(session)
     await ctx.connect()
 
 
