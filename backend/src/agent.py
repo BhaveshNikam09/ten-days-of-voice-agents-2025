@@ -1,148 +1,103 @@
-import logging
 import json
-import os
-from datetime import datetime
-
 from dotenv import load_dotenv
-from livekit.agents import (
-    Agent,
-    AgentSession,
-    JobContext,
-    JobProcess,
-    MetricsCollectedEvent,
-    RoomInputOptions,
-    WorkerOptions,
-    cli,
-    metrics,
-    tokenize,
-)
-from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
+from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, metrics, tokenize
+from livekit.agents import RoomInputOptions, MetricsCollectedEvent
+from livekit.plugins import murf, silero, deepgram, google, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
-LOG_FILE = "wellness_log.json"
+CONTENT_FILE = "shared-data/day4_tutor_content.json"
 
 
-# -------- JSON PERSISTENCE -------- #
-def read_last_checkin():
-    if not os.path.exists(LOG_FILE):
-        return None
-    try:
-        with open(LOG_FILE, "r") as f:
-            data = json.load(f)
-            if "sessions" in data and len(data["sessions"]) > 0:
-                return data["sessions"][-1]
-    except:
-        return None
-    return None
+def load_content():
+    with open(CONTENT_FILE, "r") as f:
+        return json.load(f)
 
 
-def write_checkin(entry):
-    try:
-        if not os.path.exists(LOG_FILE):
-            data = {"sessions": []}
-        else:
-            with open(LOG_FILE, "r") as f:
-                data = json.load(f)
-    except:
-        data = {"sessions": []}
-
-    data["sessions"].append(entry)
-    with open(LOG_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-# -------- WELLNESS AGENT -------- #
-class WellnessAgent(Agent):
+class TutorAgent(Agent):
     def __init__(self):
         super().__init__(
             instructions=(
-                "You are a supportive daily Health & Wellness Voice Companion. "
-                "Do a short check-in one question at a time. "
-                "Do NOT provide diagnostic or medical advice.\n\n"
-                "Conversation flow:\n"
-                "1) Ask how the user is feeling emotionally\n"
-                "2) Ask about their energy today\n"
-                "3) Ask for 1–3 goals for today\n"
-                "4) Offer simple realistic encouragement\n"
-                "5) Recap mood + energy + goals and confirm, then stop\n"
-                "Tone: warm, concise, encouraging."
+                "You are an Active Recall Learning Coach. You operate in 3 modes: learn, quiz, and teach_back. "
+                "The user can switch between these modes anytime simply by saying the mode name. "
+                "Use short explanations and stay interactive."
             )
         )
-        self.stage = "mood"
-        self.prev = read_last_checkin()
-        self.mood = None
-        self.energy = None
-        self.goals = None
+        self.mode = None
+        self.concepts = load_content()
+        self.current_concept = None
 
     async def on_start(self, session: AgentSession):
-        if self.prev:
-            await session.say(
-                f"Welcome back! Last time you mentioned feeling '{self.prev['mood']}' "
-                f"with '{self.prev['energy']}' energy. How are you feeling today emotionally?",
-                allow_interruptions=True,
-            )
-        else:
-            await session.say(
-                "Hi, good to see you again! How are you feeling today emotionally?",
-                allow_interruptions=True,
-            )
+        await session.say(
+            "👋 Welcome to Sage-the-Tutor! Which mode would you like — learn, quiz, or teach-back?",
+            allow_interruptions=True,
+        )
+
+    async def set_voice(self, session, voice):
+        session.tts = murf.TTS(
+            voice=voice,
+            style="Conversation",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True,
+        )
+
+    def pick_concept(self, msg: str):
+        for c in self.concepts:
+            if c["id"] in msg.lower() or c["title"].lower() in msg.lower():
+                return c
+        return None
 
     async def on_response(self, response, session: AgentSession):
-        msg = response.text.strip()
+        msg = response.text.strip().lower()
 
-        if self.stage == "mood":
-            self.mood = msg
-            self.stage = "energy"
-            return await session.say(
-                "Thank you. How is your energy today — low, medium, or high?",
-                allow_interruptions=True,
-            )
+        # MODE CHANGE
+        if "learn" in msg:
+            self.mode = "learn"
+            await self.set_voice(session, "Nikhil")
+            return await session.say("Great — which concept do you want to learn?")
 
-        if self.stage == "energy":
-            self.energy = msg
-            self.stage = "goals"
-            return await session.say(
-                "Got it. What are 1–3 goals you want to focus on today?",
-                allow_interruptions=True,
-            )
+        if "quiz" in msg:
+            self.mode = "quiz"
+            await self.set_voice(session, "Tanushree")
+            return await session.say("You got it — which concept should I quiz you on?")
 
-        if self.stage == "goals":
-            self.goals = [g.strip() for g in msg.split(",")] if msg else []
-            self.stage = "recap"
-            return await session.say(
-                "Those sound good. Tip: small steps and short breaks can help. Ready for your recap?",
-                allow_interruptions=True,
-            )
+        if "teach" in msg:
+            self.mode = "teach_back"
+            await self.set_voice(session, "Priya")
+            return await session.say("Nice — which concept do you want to teach me back?")
 
-        if self.stage == "recap":
-            summary = (
-                f"You're feeling '{self.mood}' with '{self.energy}' energy, "
-                f"and your goals today are: {', '.join(self.goals)}."
-            )
+        if self.mode is None:
+            return await session.say("Please choose a mode: learn, quiz, or teach-back.")
 
-            await session.say(summary + " Does that sound right?", allow_interruptions=True)
+        # Pick concept
+        if self.current_concept is None:
+            concept = self.pick_concept(msg)
+            if concept is None:
+                return await session.say(
+                    "I couldn't identify the concept. Try words like variables or loops."
+                )
+            self.current_concept = concept
 
-            write_checkin(
-                {
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "mood": self.mood,
-                    "energy": self.energy,
-                    "goals": self.goals,
-                    "summary": summary,
-                }
-            )
+        concept = self.current_concept
 
-            self.stage = "done"
-            return
+        # MODE BEHAVIOR
+        if self.mode == "learn":
+            await session.say(f"{concept['title']}: {concept['summary']}")
+            self.current_concept = None
+            return await session.say("Would you like another concept or a different mode?")
 
-        if self.stage == "done":
-            await session.say("Perfect. I'll check in with you again tomorrow 💛", allow_interruptions=True)
+        if self.mode == "quiz":
+            await session.say(concept["sample_question"])
+            self.current_concept = None
+            return await session.say("I’ll wait for your answer — or you can switch mode anytime.")
+
+        if self.mode == "teach_back":
+            await session.say(f"Teach me: {concept['sample_question']}")
+            self.current_concept = None
+            return await session.say("I’ll listen — and you can switch modes anytime.")
 
 
-# -------- WORKER SETUP -------- #
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
@@ -152,37 +107,27 @@ async def entrypoint(ctx: JobContext):
 
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
-        llm=google.LLM(),   # 🔥 auto-selects a supported model (no 404 issues)
-        tts=murf.TTS(
-            voice="Anusha",
-            style="Conversation",
-            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-            text_pacing=True,
-        ),
+        llm=google.LLM(),
+        tts=murf.TTS(voice="Matthew", style="Conversation"),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
 
     usage = metrics.UsageCollector()
+
     @session.on("metrics_collected")
     def _collect(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
         usage.collect(ev.metrics)
 
-    async def log_usage():
-        logger.info(f"Usage summary: {usage.get_summary()}")
-
-    ctx.add_shutdown_callback(log_usage)
-
     await session.start(
-        agent=WellnessAgent(),
+        agent=TutorAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )
-
     await session.current_agent.on_start(session)
     await ctx.connect()
 
