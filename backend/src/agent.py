@@ -4,10 +4,13 @@ from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOp
 from livekit.agents import RoomInputOptions, MetricsCollectedEvent
 from livekit.plugins import murf, silero, deepgram, google, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+import uuid
+import json
 
 load_dotenv(".env.local")
 
-CONTENT_FILE = "shared-data/day4_tutor_content.json"
+CONTENT_FILE = "shared-data/razorpay_faq.json"
+LEADS_FILE = "shared-data/collected_leads.json"
 
 
 def load_content():
@@ -15,87 +18,90 @@ def load_content():
         return json.load(f)
 
 
-class TutorAgent(Agent):
+def save_lead(data):
+    try:
+        leads = []
+        try:
+            with open(LEADS_FILE, "r") as f:
+                leads = json.load(f)
+        except:
+            pass
+        leads.append(data)
+        with open(LEADS_FILE, "w") as f:
+            json.dump(leads, f, indent=2)
+    except Exception as e:
+        print("Lead save error:", e)
+
+
+class SDR(Agent):
     def __init__(self):
-        super().__init__(
-            instructions=(
-                "You are an Active Recall Learning Coach. You operate in 3 modes: learn, quiz, and teach_back. "
-                "The user can switch between these modes anytime simply by saying the mode name. "
-                "Use short explanations and stay interactive."
-            )
-        )
-        self.mode = None
-        self.concepts = load_content()
-        self.current_concept = None
+        super().__init__(instructions="You are a polite Sales Development Representative for Razorpay.")
+        self.content = load_content()
+        self.lead = {
+            "id": str(uuid.uuid4()),
+            "name": None,
+            "company": None,
+            "email": None,
+            "role": None,
+            "use_case": None,
+            "team_size": None,
+            "timeline": None
+        }
+        self.topic_asked = False
 
     async def on_start(self, session: AgentSession):
         await session.say(
-            "👋 Welcome to Sage-the-Tutor! Which mode would you like — learn, quiz, or teach-back?",
-            allow_interruptions=True,
+            "👋 Hey! Welcome to Razorpay. What brought you here today?", allow_interruptions=True
         )
 
-    async def set_voice(self, session, voice):
-        session.tts = murf.TTS(
-            voice=voice,
-            style="Conversation",
-            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-            text_pacing=True,
-        )
-
-    def pick_concept(self, msg: str):
-        for c in self.concepts:
-            if c["id"] in msg.lower() or c["title"].lower() in msg.lower():
-                return c
+    def search_faq(self, msg: str):
+        msg = msg.lower()
+        for f in self.content["faq"]:
+            if any(keyword in msg for keyword in f["question"].lower().split()):
+                return f["answer"]
         return None
 
+    async def collect_field(self, session, msg, field, prompt):
+        if self.lead[field] is None:
+            self.lead[field] = msg
+            await session.say(prompt)
+            return True
+        return False
+
     async def on_response(self, response, session: AgentSession):
-        msg = response.text.strip().lower()
+        msg = response.text.strip()
 
-        # MODE CHANGE
-        if "learn" in msg:
-            self.mode = "learn"
-            await self.set_voice(session, "Nikhil")
-            return await session.say("Great — which concept do you want to learn?")
+        # detect goodbye → end call
+        if any(x in msg.lower() for x in ["thanks", "bye", "that’s all", "done", "i'm done"]):
+            await session.say(
+                f"Thanks {self.lead['name']}! Here's a quick summary: "
+                f"You are a {self.lead['role']} at {self.lead['company']}, "
+                f"interested in Razorpay for {self.lead['use_case']}. "
+                f"Timeline: {self.lead['timeline']}. I'll share more over email soon."
+            )
+            save_lead(self.lead)
+            return
 
-        if "quiz" in msg:
-            self.mode = "quiz"
-            await self.set_voice(session, "Tanushree")
-            return await session.say("You got it — which concept should I quiz you on?")
+        # try answering FAQ
+        found = self.search_faq(msg)
+        if found:
+            await session.say(found)
 
-        if "teach" in msg:
-            self.mode = "teach_back"
-            await self.set_voice(session, "Priya")
-            return await session.say("Nice — which concept do you want to teach me back?")
-
-        if self.mode is None:
-            return await session.say("Please choose a mode: learn, quiz, or teach-back.")
-
-        # Pick concept
-        if self.current_concept is None:
-            concept = self.pick_concept(msg)
-            if concept is None:
-                return await session.say(
-                    "I couldn't identify the concept. Try words like variables or loops."
-                )
-            self.current_concept = concept
-
-        concept = self.current_concept
-
-        # MODE BEHAVIOR
-        if self.mode == "learn":
-            await session.say(f"{concept['title']}: {concept['summary']}")
-            self.current_concept = None
-            return await session.say("Would you like another concept or a different mode?")
-
-        if self.mode == "quiz":
-            await session.say(concept["sample_question"])
-            self.current_concept = None
-            return await session.say("I’ll wait for your answer — or you can switch mode anytime.")
-
-        if self.mode == "teach_back":
-            await session.say(f"Teach me: {concept['sample_question']}")
-            self.current_concept = None
-            return await session.say("I’ll listen — and you can switch modes anytime.")
+        # Lead capture flow
+        if await self.collect_field(session, msg, "name", "Nice! Which company are you from?"):
+            return
+        if await self.collect_field(session, msg, "company", "Cool — what’s your email so we stay in touch?"):
+            return
+        if await self.collect_field(session, msg, "email", "Your role in the company?"):
+            return
+        if await self.collect_field(session, msg, "role", "What's your use case for Razorpay?"):
+            return
+        if await self.collect_field(session, msg, "use_case", "How big is your team?"):
+            return
+        if await self.collect_field(session, msg, "team_size", "When are you planning to start? (now / soon / later)"):
+            return
+        if await self.collect_field(session, msg, "timeline", "Great! Feel free to ask anything else."):
+            return
 
 
 def prewarm(proc: JobProcess):
@@ -122,7 +128,7 @@ async def entrypoint(ctx: JobContext):
         usage.collect(ev.metrics)
 
     await session.start(
-        agent=TutorAgent(),
+        agent=SDR(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),

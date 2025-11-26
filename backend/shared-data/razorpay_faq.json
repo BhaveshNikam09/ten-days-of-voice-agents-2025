@@ -1,0 +1,26 @@
+{
+  "company": "Razorpay",
+  "description": "Razorpay is an Indian fintech company that provides online payment gateway services for businesses.",
+  "faq": [
+    {
+      "question": "What does Razorpay do?",
+      "answer": "Razorpay enables businesses to accept and process online payments via credit/debit cards, UPI, net banking and wallets."
+    },
+    {
+      "question": "Who is Razorpay for?",
+      "answer": "Razorpay is for startups, e-commerce stores, SaaS companies, freelancers, and enterprises that want to accept digital payments."
+    },
+    {
+      "question": "Does Razorpay have a free plan?",
+      "answer": "Razorpay does not have a subscription fee. You only pay per successful transaction."
+    },
+    {
+      "question": "What is the pricing?",
+      "answer": "2% per transaction for domestic cards, UPI, wallets and net banking. 3% for international cards."
+    },
+    {
+      "question": "How can I integrate Razorpay?",
+      "answer": "Integration options include checkout, payment links, hosted pages, plugins (Shopify, WooCommerce, etc.) and APIs."
+    }
+  ]
+}
