@@ -1,0 +1,227 @@
+[
+  {
+    "id": "milk_fullcream_1l",
+    "name": "Fresh Farm Full Cream Milk",
+    "category": "Groceries",
+    "price": 60.0,
+    "currency": "INR",
+    "brand": "Fresh Farm",
+    "size": "1 Litre",
+    "unit": "pack",
+    "tags": [
+      "dairy",
+      "vegetarian"
+    ]
+  },
+  {
+    "id": "brown_bread_400g",
+    "name": "Whole Wheat Brown Bread",
+    "category": "Groceries",
+    "price": 40.0,
+    "currency": "INR",
+    "brand": "HealthyBake",
+    "size": "400 g",
+    "unit": "loaf",
+    "tags": [
+      "vegan"
+    ]
+  },
+  {
+    "id": "white_bread_400g",
+    "name": "Soft White Bread",
+    "category": "Groceries",
+    "price": 35.0,
+    "currency": "INR",
+    "brand": "SoftBake",
+    "size": "400 g",
+    "unit": "loaf",
+    "tags": [
+      "vegetarian"
+    ]
+  },
+  {
+    "id": "eggs_12pack",
+    "name": "Farm Eggs - Pack of 12",
+    "category": "Groceries",
+    "price": 90.0,
+    "currency": "INR",
+    "brand": "DailyFarm",
+    "size": "12 pcs",
+    "unit": "box",
+    "tags": [
+      "non-veg"
+    ]
+  },
+  {
+    "id": "peanut_butter_large",
+    "name": "Crunchy Peanut Butter",
+    "category": "Groceries",
+    "price": 220.0,
+    "currency": "INR",
+    "brand": "NutriSpread",
+    "size": "500 g",
+    "unit": "jar",
+    "tags": [
+      "vegan"
+    ]
+  },
+  {
+    "id": "pasta_penne_500g",
+    "name": "Penne Pasta",
+    "category": "Groceries",
+    "price": 80.0,
+    "currency": "INR",
+    "brand": "PastaNova",
+    "size": "500 g",
+    "unit": "pack",
+    "tags": [
+      "vegetarian"
+    ]
+  },
+  {
+    "id": "pasta_sauce_tomato_basil",
+    "name": "Tomato Basil Pasta Sauce",
+    "category": "Groceries",
+    "price": 150.0,
+    "currency": "INR",
+    "brand": "Italiano",
+    "size": "350 g",
+    "unit": "jar",
+    "tags": [
+      "vegan"
+    ]
+  },
+  {
+    "id": "olive_oil_500ml",
+    "name": "Extra Virgin Olive Oil",
+    "category": "Groceries",
+    "price": 320.0,
+    "currency": "INR",
+    "brand": "Oliva",
+    "size": "500 ml",
+    "unit": "bottle",
+    "tags": [
+      "vegan"
+    ]
+  },
+  {
+    "id": "chips_masala_100g",
+    "name": "Masala Potato Chips",
+    "category": "Snacks",
+    "price": 25.0,
+    "currency": "INR",
+    "brand": "CrispCrunch",
+    "size": "100 g",
+    "unit": "pack",
+    "tags": [
+      "vegetarian"
+    ]
+  },
+  {
+    "id": "chocolate_bar_50g",
+    "name": "Milk Chocolate Bar",
+    "category": "Snacks",
+    "price": 50.0,
+    "currency": "INR",
+    "brand": "ChocoJoy",
+    "size": "50 g",
+    "unit": "bar",
+    "tags": [
+      "vegetarian"
+    ]
+  },
+  {
+    "id": "frozen_margherita_pizza",
+    "name": "Frozen Margherita Pizza",
+    "category": "Prepared Food",
+    "price": 280.0,
+    "currency": "INR",
+    "brand": "PizzaBox",
+    "size": "1 pizza",
+    "unit": "pack",
+    "tags": [
+      "vegetarian"
+    ]
+  },
+  {
+    "id": "veg_sandwich_ready",
+    "name": "Ready-to-Eat Veg Sandwich",
+    "category": "Prepared Food",
+    "price": 120.0,
+    "currency": "INR",
+    "brand": "SnackTime",
+    "size": "200 g",
+    "unit": "pack",
+    "tags": [
+      "vegetarian"
+    ]
+  },
+  {
+    "id": "salad_mix_250g",
+    "name": "Fresh Salad Mix",
+    "category": "Groceries",
+    "price": 90.0,
+    "currency": "INR",
+    "brand": "GreenLeaf",
+    "size": "250 g",
+    "unit": "pack",
+    "tags": [
+      "vegan",
+      "gluten-free"
+    ]
+  },
+  {
+    "id": "almond_milk_1l",
+    "name": "Unsweetened Almond Milk",
+    "category": "Groceries",
+    "price": 190.0,
+    "currency": "INR",
+    "brand": "NutriAlmond",
+    "size": "1 Litre",
+    "unit": "pack",
+    "tags": [
+      "vegan",
+      "lactose-free"
+    ]
+  },
+  {
+    "id": "paneer_200g",
+    "name": "Fresh Paneer",
+    "category": "Groceries",
+    "price": 110.0,
+    "currency": "INR",
+    "brand": "DairyBest",
+    "size": "200 g",
+    "unit": "pack",
+    "tags": [
+      "vegetarian"
+    ]
+  },
+  {
+    "id": "rice_1kg",
+    "name": "Basmati Rice",
+    "category": "Groceries",
+    "price": 140.0,
+    "currency": "INR",
+    "brand": "RoyalGrain",
+    "size": "1 kg",
+    "unit": "pack",
+    "tags": [
+      "vegan",
+      "gluten-free"
+    ]
+  },
+  {
+    "id": "corn_flakes_500g",
+    "name": "Corn Flakes Cereal",
+    "category": "Groceries",
+    "price": 130.0,
+    "currency": "INR",
+    "brand": "MorningBowl",
+    "size": "500 g",
+    "unit": "box",
+    "tags": [
+      "vegetarian"
+    ]
+  }
+]

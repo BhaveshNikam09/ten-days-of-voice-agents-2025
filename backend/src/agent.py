@@ -1,328 +1,248 @@
 import json
+import uuid
+import os
+from datetime import datetime
+from typing import List, Dict, Any, Optional
+
 from dotenv import load_dotenv
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, metrics
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    JobContext,
+    JobProcess,
+    WorkerOptions,
+    cli,
+    metrics,
+)
 from livekit.agents import RoomInputOptions, MetricsCollectedEvent
 from livekit.plugins import murf, silero, deepgram, google, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-import uuid
-import os
 
 load_dotenv(".env.local")
 
-FRAUD_DB_FILE = "shared-data/fraud_cases.json"
+# ---------- FILE PATHS ----------
+CATALOG_FILE = "shared-data/catalog.json"
+ORDERS_DB_FILE = "shared-data/orders.json"
+
+BRAND_NAME = "QuickFresh"  # brand name for the assistant
 
 
-def _default_fraud_cases():
-    """
-    Creates a few sample fraud cases with fake data.
-    This will be written to FRAUD_DB_FILE if it doesn't exist yet.
-    """
-    return [
-        {
-            "id": str(uuid.uuid4()),
-            "userName": "John",
-            "securityIdentifier": "12345",
-            "cardEnding": "4242",
-            "transactionAmount": 129.99,
-            "transactionCurrency": "USD",
-            "transactionName": "ABC Industry",
-            "transactionCategory": "e-commerce",
-            "transactionSource": "alibaba.com",
-            "transactionLocation": "San Francisco, USA",
-            "transactionTime": "2025-11-25 14:32",
-            "securityQuestion": "What is your favorite color?",
-            "securityAnswer": "blue",
-            "status": "pending_review",
-            "outcomeNote": ""
-        },
-        {
-            "id": str(uuid.uuid4()),
-            "userName": "Sara",
-            "securityIdentifier": "98765",
-            "cardEnding": "8812",
-            "transactionAmount": 520.0,
-            "transactionCurrency": "USD",
-            "transactionName": "TravelNow Flights",
-            "transactionCategory": "travel",
-            "transactionSource": "travelnow.com",
-            "transactionLocation": "New York, USA",
-            "transactionTime": "2025-11-24 09:10",
-            "securityQuestion": "What city were you born in?",
-            "securityAnswer": "mumbai",
-            "status": "pending_review",
-            "outcomeNote": ""
-        }
-    ]
+# ---------- CATALOG & ORDERS HELPERS ----------
+def _ensure_shared_data_dir():
+    dirname = os.path.dirname(CATALOG_FILE)
+    if dirname and not os.path.exists(dirname):
+        os.makedirs(dirname, exist_ok=True)
 
 
-def load_fraud_cases():
-    """
-    Load fraud cases database from JSON file.
-    If file doesn't exist, create it with default sample data.
-    """
+def load_catalog() -> List[Dict[str, Any]]:
+    _ensure_shared_data_dir()
+    if not os.path.exists(CATALOG_FILE):
+        # Create a blank catalog if missing
+        with open(CATALOG_FILE, "w", encoding="utf-8") as f:
+            json.dump([], f, indent=2)
+        return []
+    with open(CATALOG_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_orders() -> List[Dict[str, Any]]:
+    _ensure_shared_data_dir()
+    if not os.path.exists(ORDERS_DB_FILE):
+        with open(ORDERS_DB_FILE, "w", encoding="utf-8") as f:
+            json.dump([], f, indent=2)
+        return []
+    with open(ORDERS_DB_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_orders(orders: List[Dict[str, Any]]):
+    _ensure_shared_data_dir()
+    with open(ORDERS_DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(orders, f, indent=2)
+
+
+# ---------- SIMPLE RECIPE MAPPING ----------
+RECIPES = {
+    "peanut butter sandwich": {},
+    "pasta": {},
+    "simple breakfast": {},
+    "salad": {},
+    "cereal breakfast": {},
+}
+
+# ---------- ORDER STATUS FLOW ----------
+STATUS_FLOW = [
+    ("received", 0),
+    ("confirmed", 2),
+    ("being_prepared", 8),
+    ("out_for_delivery", 20),
+    ("delivered", 40),
+]
+
+
+def parse_int_from_text(text: str) -> Optional[int]:
+    text = text.lower()
+    for tok in text.split():
+        if tok.isdigit():
+            return int(tok)
+    words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+    for w, n in words.items():
+        if w in text:
+            return n
+    return None
+
+
+def update_order_status_based_on_time(order: Dict[str, Any]) -> None:
     try:
-        if not os.path.exists(os.path.dirname(FRAUD_DB_FILE)):
-            os.makedirs(os.path.dirname(FRAUD_DB_FILE), exist_ok=True)
-
-        if not os.path.exists(FRAUD_DB_FILE):
-            cases = _default_fraud_cases()
-            with open(FRAUD_DB_FILE, "w") as f:
-                json.dump(cases, f, indent=2)
-            return cases
-
-        with open(FRAUD_DB_FILE, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        print("Error loading fraud DB:", e)
-        # fall back to in-memory defaults if something goes wrong
-        return _default_fraud_cases()
+        created_dt = datetime.fromisoformat(order.get("created_at"))
+        minutes = (datetime.now() - created_dt).total_seconds() / 60.0
+        best_status = order.get("status", "received")
+        for status, min_minutes in STATUS_FLOW:
+            if minutes >= min_minutes:
+                best_status = status
+        order["status"] = best_status
+    except:
+        pass
 
 
-def save_fraud_cases(cases):
-    """
-    Persist the full fraud cases list back to the JSON database.
-    """
-    try:
-        with open(FRAUD_DB_FILE, "w") as f:
-            json.dump(cases, f, indent=2)
-    except Exception as e:
-        print("Error saving fraud DB:", e)
-
-
-class FraudAgent(Agent):
-    """
-    Fraud Alert Voice Agent for a fictional bank.
-    - Loads a fraud case using the customer's name.
-    - Verifies the customer using a basic security question.
-    - Reads out the suspicious transaction.
-    - Asks if the transaction is legitimate.
-    - Updates the fraud case status: confirmed_safe / confirmed_fraud / verification_failed.
-    """
-
+# ---------- AGENT IMPLEMENTATION ----------
+class GroceryOrderingAgent(Agent):
     def __init__(self):
         super().__init__(
             instructions=(
-                "You are a calm, professional fraud detection representative for DemoBank. "
-                "You are speaking to a customer about a suspicious card transaction. "
-                "Use short, clear sentences. Be reassuring and helpful. "
-                "NEVER ask for full card numbers, passwords, PINs, or any credentials. "
-                "Only use non-sensitive information such as the user's first name, a simple security question, "
-                "and masked card information that is already in the database."
+                f"You are a friendly food and grocery ordering assistant for {BRAND_NAME}. "
+                "Help customers add items to a cart, show cart, and place orders. "
+                "After checkout, allow tracking of order status using stored JSON data."
             )
         )
-        self.fraud_cases = load_fraud_cases()
-        self.current_case = None
-        self.state = "ask_name"  # ask_name -> verify -> confirm_txn -> finished
-        self.verification_attempted = False
+        self.catalog = load_catalog()
+        self.orders = load_orders()
+        self.customer_name: Optional[str] = None
+        self.cart: Dict[str, float] = {}
+        self.state: str = "ask_name"
 
+    # --- Utility ---
+    def _get_item(self, text: str) -> Optional[Dict[str, Any]]:
+        text = text.lower()
+        for item in self.catalog:
+            if text in item["name"].lower() or text in item["id"].lower():
+                return item
+        return None
+
+    def _cart_items_detailed(self):
+        items = []
+        for item_id, qty in self.cart.items():
+            item = next((i for i in self.catalog if i["id"] == item_id), None)
+            if item:
+                items.append(
+                    {
+                        "id": item_id,
+                        "name": item["name"],
+                        "price": item["price"],
+                        "quantity": qty,
+                        "line_total": item["price"] * qty,
+                    }
+                )
+        return items
+
+    def _add_order(self):
+        order_id = str(uuid.uuid4())
+        detailed_items = self._cart_items_detailed()
+        total = sum(i["line_total"] for i in detailed_items)
+        order = {
+            "id": order_id,
+            "customer_name": self.customer_name,
+            "items": detailed_items,
+            "total": total,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "status": "received",
+        }
+        self.orders.append(order)
+        save_orders(self.orders)
+        return order
+
+    # --- Lifecycle ---
     async def on_start(self, session: AgentSession):
-        """
-        Called at the start of the call/session.
-        """
         await session.say(
-            "Hello, this is the fraud monitoring team from DemoBank. "
-            "This is a demo call about a suspicious card transaction. "
-            "To begin, may I know your first name?",
+            f"Hi, welcome to {BRAND_NAME}! May I know your name?",
             allow_interruptions=True,
         )
 
-    def _find_case_by_name(self, name: str):
-        """
-        Simple lookup by userName (case-insensitive).
-        """
-        name = name.strip().lower()
-        for case in self.fraud_cases:
-            if case.get("userName", "").strip().lower() == name:
-                return case
-        return None
-
-    def _update_case_in_db(self):
-        """
-        Replace the current_case inside the fraud_cases list and save to DB.
-        """
-        if not self.current_case:
-            return
-        updated_cases = []
-        for c in self.fraud_cases:
-            if c.get("id") == self.current_case.get("id"):
-                updated_cases.append(self.current_case)
-            else:
-                updated_cases.append(c)
-        self.fraud_cases = updated_cases
-        save_fraud_cases(self.fraud_cases)
-
-    async def _read_transaction_and_ask(self, session: AgentSession):
-        """
-        Read out the suspicious transaction and ask if it was made by the customer.
-        """
-        c = self.current_case
-        amount = c.get("transactionAmount")
-        currency = c.get("transactionCurrency", "USD")
-        merchant = c.get("transactionName")
-        location = c.get("transactionLocation")
-        time_str = c.get("transactionTime")
-        card_ending = c.get("cardEnding")
-
-        text = (
-            f"Thank you for confirming your identity. "
-            f"We detected a suspicious transaction on your DemoBank card ending with {card_ending}. "
-            f"The transaction is for {amount} {currency} at {merchant} in {location}, "
-            f"on {time_str}. "
-            f"Did you make this transaction? Please answer yes or no."
-        )
-        await session.say(text, allow_interruptions=True)
-
     async def on_response(self, response, session: AgentSession):
-        """
-        Handle user responses and move through the call flow.
-        """
-        msg = response.text.strip()
-        if not msg:
+        text = (response.text or "").lower().strip()
+        if not text:
             return
 
-        # Early exit if state is finished
-        if self.state == "finished":
-            return
-
-        # 1) Ask for customer name and load fraud case
+        # Step 1: Ask for name
         if self.state == "ask_name":
-            name = msg
-            case = self._find_case_by_name(name)
-            if not case:
-                await session.say(
-                    "I’m not finding any active fraud alerts under that name in this demo system. "
-                    "I’ll end the call here. Thank you for your time."
-                )
-                self.state = "finished"
-                return
-
-            self.current_case = case
-            self.state = "verify"
-            question = self.current_case.get(
-                "securityQuestion",
-                "For security, please confirm: what is your favorite color?",
-            )
+            self.customer_name = text.strip().title()
+            self.state = "ordering"
             await session.say(
-                f"Hi {self.current_case.get('userName')}. "
-                f"Before we continue, I need to verify your identity. {question}"
+                f"Nice to meet you, {self.customer_name}. What would you like to order first?",
+                allow_interruptions=True,
             )
             return
 
-        # 2) Verification step
-        if self.state == "verify":
-            self.verification_attempted = True
-            expected = (self.current_case.get("securityAnswer") or "").strip().lower()
-            given = msg.strip().lower()
-
-            if expected and expected in given:
-                # Verification passed
-                await session.say("Perfect, thank you. Your identity is verified.")
-                self.state = "confirm_txn"
-                await self._read_transaction_and_ask(session)
-                return
+        # Show cart
+        if "cart" in text:
+            if not self.cart:
+                await session.say("Your cart is empty.", allow_interruptions=True)
             else:
-                # Verification failed → update DB and end
-                self.current_case["status"] = "verification_failed"
-                self.current_case[
-                    "outcomeNote"
-                ] = "Verification failed. Customer could not correctly answer security question in demo."
-                self._update_case_in_db()
+                msg = "; ".join(f"{d['quantity']} x {d['name']}" for d in self._cart_items_detailed())
+                await session.say(f"In your cart: {msg}", allow_interruptions=True)
+            return
 
-                await session.say(
-                    "I’m sorry, but the details do not match our records. "
-                    "For your security, I won’t be able to discuss this transaction further. "
-                    "Please contact DemoBank customer support using the number on the back of your card. "
-                    "This demo call will now end."
-                )
-                self.state = "finished"
+        # Place order
+        if "checkout" in text or "place my order" in text:
+            if not self.cart:
+                await session.say("Your cart is empty.", allow_interruptions=True)
                 return
-
-        # 3) Confirm transaction → yes/no
-        if self.state == "confirm_txn":
-            text = msg.lower()
-
-            is_yes = any(
-                phrase in text
-                for phrase in [
-                    "yes",
-                    "yeah",
-                    "yup",
-                    "i did",
-                    "it was me",
-                    "this is mine",
-                    "that's mine",
-                    "that is mine",
-                    "i made this",
-                ]
+            order = self._add_order()
+            self.cart.clear()
+            self.state = "finished"
+            await session.say(
+                f"Your order is placed! Order ID: {order['id']}. Status set to received.",
+                allow_interruptions=True,
             )
-            is_no = any(
-                phrase in text
-                for phrase in [
-                    "no",
-                    "nope",
-                    "wasn't me",
-                    "was not me",
-                    "i didn't",
-                    "not mine",
-                    "i did not",
-                    "i didn't do",
-                    "fraud",
-                ]
+            return
+
+        # Tracking
+        if "track" in text or "where is my order" in text:
+            if not self.orders:
+                await session.say("No previous order found.", allow_interruptions=True)
+                return
+            order = self.orders[-1]
+            update_order_status_based_on_time(order)
+            save_orders(self.orders)
+            await session.say(
+                f"Your latest order status is '{order['status']}'.",
+                allow_interruptions=True,
             )
+            return
 
-            if not (is_yes or is_no):
-                await session.say(
-                    "I’m sorry, I didn’t quite catch that. "
-                    "Please clearly answer yes if you made this transaction, or no if you did not."
-                )
-                return
+        # Add items
+        item = self._get_item(text)
+        qty = parse_int_from_text(text) or 1
+        if item:
+            self.cart[item["id"]] = self.cart.get(item["id"], 0) + qty
+            await session.say(
+                f"Added {qty} × {item['name']} to your cart.",
+                allow_interruptions=True,
+            )
+            return
 
-            if is_yes:
-                # Mark as safe
-                self.current_case["status"] = "confirmed_safe"
-                self.current_case[
-                    "outcomeNote"
-                ] = "Customer confirmed the transaction as legitimate in demo."
-                self._update_case_in_db()
-
-                await session.say(
-                    "Thank you. I have marked this transaction as safe in our system. "
-                    "Your card remains active. "
-                    "If you notice anything unusual in future, please contact DemoBank immediately. "
-                    "This concludes our demo call. Have a great day!"
-                )
-                self.state = "finished"
-                return
-
-            if is_no:
-                # Mark as fraud
-                self.current_case["status"] = "confirmed_fraud"
-                self.current_case[
-                    "outcomeNote"
-                ] = (
-                    "Customer denied making the transaction. "
-                    "Card blocked and dispute initiated in demo flow."
-                )
-                self._update_case_in_db()
-
-                await session.say(
-                    "Thank you for letting us know. "
-                    "I have marked this transaction as fraudulent in our system. "
-                    "In this demo, your card is blocked and a dispute has been initiated. "
-                    "A DemoBank representative will follow up with you shortly. "
-                    "Thank you for your time and stay safe."
-                )
-                self.state = "finished"
-                return
+        await session.say(
+            "I'm not sure what you mean. Please say an item name from the catalog.",
+            allow_interruptions=True,
+        )
 
 
+# ---------- LIVEKIT SETUP ----------
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 
 async def entrypoint(ctx: JobContext):
-    ctx.log_context_fields = {"room": ctx.room.name}
-
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(),
@@ -331,16 +251,8 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
-
-    usage = metrics.UsageCollector()
-
-    @session.on("metrics_collected")
-    def _collect(ev: MetricsCollectedEvent):
-        metrics.log_metrics(ev.metrics)
-        usage.collect(ev.metrics)
-
     await session.start(
-        agent=FraudAgent(),
+        agent=GroceryOrderingAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
@@ -351,4 +263,6 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(
+        WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm)
+    )
